@@ -7,6 +7,10 @@ from gwemopt.catalogs.base_catalog import BaseCatalog
 class CluCatalog(BaseCatalog):
     name = "clu"
 
+    @property
+    def mag_column(self) -> str:
+        return "magb"
+
     def download_catalog(self):
         err = (
             f"CLU catalog is not available for automated download. "

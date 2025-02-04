@@ -3,8 +3,6 @@ import subprocess
 import numpy as np
 import pandas as pd
 from astropy.io import fits
-from astropy.io.misc.hdf5 import read_table_hdf5, write_table_hdf5
-from astropy.table import Table
 
 from gwemopt.catalogs.base_catalog import BaseCatalog
 
@@ -13,6 +11,10 @@ URL = "https://ned.ipac.caltech.edu/NED::LVS/fits/AsPublished/"
 
 class NEDCatalog(BaseCatalog):
     name = "ned"
+
+    @property
+    def mag_column(self) -> str:
+        return "magk"
 
     def download_catalog(self):
         temp_path = self.get_temp_path()
@@ -42,14 +44,11 @@ class NEDCatalog(BaseCatalog):
             inplace=True,
         )
         df = df[df["redshift"] > 0]
-        cat = Table.from_pandas(df)
-        write_table_hdf5(cat, str(self.get_catalog_path()), path="df")
+        df.to_parquet(str(self.get_catalog_path()), index=False)
         temp_path.unlink()
 
     def get_temp_path(self):
         return self.get_catalog_path(filetype="fits").with_stem(f"temp_{self.name}")
 
     def load_catalog(self) -> pd.DataFrame:
-        cat = read_table_hdf5(str(self.get_catalog_path()), path="df")
-        df = cat.to_pandas()
-        return df
+        return pd.read_parquet(str(self.get_catalog_path()))

@@ -17,6 +17,10 @@ Vizier.ROW_LIMIT = -1
 class TwoMRSCatalog(BaseCatalog):
     name = "2mrs"
 
+    @property
+    def mag_column(self) -> str:
+        return "magk"
+
     def download_catalog(self):
         save_path = self.get_catalog_path()
         print(f"Downloading 2MRS catalog to {save_path}...")

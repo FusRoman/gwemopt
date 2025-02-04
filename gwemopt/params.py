@@ -1,4 +1,5 @@
 import json
+from argparse import Namespace
 from pathlib import Path
 from typing import Any
 
@@ -6,13 +7,16 @@ import numpy as np
 from astropy import time
 from astropy import units as u
 
+from gwemopt.catalogs.get import CatalogOpts
 from gwemopt.paths import CONFIG_DIR
 from gwemopt.telescope import Telescope
 from gwemopt.tiles import TILE_TYPES
 from gwemopt.utils.param_utils import readParamsFromFile
 
 
-def params_struct(opts) -> tuple[dict[str, Any], list[Telescope], bool]:
+def params_struct(
+    opts: Namespace,
+) -> tuple[dict[str, Any], CatalogOpts, list[Telescope], bool]:
     """@Creates gwemopt params structure
     @param opts
         gwemopt command line options
@@ -22,17 +26,7 @@ def params_struct(opts) -> tuple[dict[str, Any], list[Telescope], bool]:
 
     params = dict(opts.__dict__)
 
-    match params["geometry"]:
-        case "2d":
-            do_3d = False
-        case "3d":
-            do_3d = True
-        case None:
-            do_3d = False
-        case _:
-            raise ValueError(
-                f"The geometry argument from the command-line should be either '2d' or '3d', is {params['geometry']}"
-            )
+    do_3d = True if opts.geometry == "3d" else False
 
     params["config"] = {}
 
@@ -45,6 +39,15 @@ def params_struct(opts) -> tuple[dict[str, Any], list[Telescope], bool]:
         )
         for telescope in telescopes
     ]
+
+    catalog_opts = CatalogOpts(
+        opts.catalog, opts.galaxy_grade, opts.galaxy_limit, Path(opts.catalogDir)
+    )
+
+    # Set output directory
+    output_dir = Path(opts.outputDir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    params["outputDir"] = output_dir
 
     params["coverageFiles"] = (
         opts.coverageFiles.split(",") if opts.coverageFiles else None
@@ -59,7 +62,6 @@ def params_struct(opts) -> tuple[dict[str, Any], list[Telescope], bool]:
     params["unbalanced_tiles"] = None
     params["filters"] = opts.filters.split(",")
     params["exposuretimes"] = np.array(opts.exposuretimes.split(","), dtype=float)
-    params["catalogDir"] = Path(opts.catalogDir)
 
     params["ignore_observability"] = (
         opts.ignore_observability if hasattr(opts, "ignore_observability") else False
@@ -126,4 +128,4 @@ def params_struct(opts) -> tuple[dict[str, Any], list[Telescope], bool]:
         opts.confidence_level if hasattr(opts, "confidence_level") else 0.9
     )
 
-    return params, telescopes, do_3d
+    return params, catalog_opts, telescopes, do_3d

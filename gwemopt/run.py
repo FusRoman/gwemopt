@@ -1,5 +1,4 @@
 import sys
-from pathlib import Path
 
 import gwemopt.coverage
 import gwemopt.efficiency
@@ -7,12 +6,11 @@ import gwemopt.lightcurve
 import gwemopt.plotting
 import gwemopt.segments
 from gwemopt.args import parse_args
-from gwemopt.catalogs.get import get_catalog
+from gwemopt.catalogs.get import CatalogName, get_catalog
 from gwemopt.io.schedule import summary
 from gwemopt.io.skymap import get_skymap, read_skymap
 from gwemopt.moc import create_moc
 from gwemopt.params import params_struct
-from gwemopt.paths import DEFAULT_BASE_OUTPUT_DIR
 from gwemopt.plotting.plot_coverage import (
     make_coverage_movie,
     make_coverage_plots,
@@ -30,7 +28,7 @@ def run(args=None):
 
     args = parse_args(args)
 
-    params, telescopes, do_3d = params_struct(args)
+    params, catalog_opts, telescopes, do_3d = params_struct(args)
 
     if len(params["filters"]) != len(params["exposuretimes"]):
         raise ValueError(
@@ -48,18 +46,6 @@ def run(args=None):
     )
     params["gpstime"] = gpstime
 
-    # Set output directory
-    if args.outputDir is not None:
-        output_dir = Path(args.outputDir)
-    else:
-        output_dir = DEFAULT_BASE_OUTPUT_DIR.joinpath(
-            f"{params['name']}/{'+'.join(params['telescopes'])}/"
-        )
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    params["outputDir"] = output_dir
-    print(f"Output directory: {output_dir}")
-
     telescope_segments, exposurelist, nwindows, tot_obs_time = (
         gwemopt.segments.get_telescope_segments(
             telescopes,
@@ -72,9 +58,16 @@ def run(args=None):
 
     print("Loading skymap...")
 
-    if params["catalog"] is not None:
+    if catalog_opts.catalog != CatalogName.NOCAT:
         print("Generating catalog...")
-        map_struct, catalog_struct = get_catalog(params, map_struct)
+        map_struct, catalog_struct = get_catalog(
+            catalog_opts,
+            params["confidence_level"],
+            params["powerlaw_dist_exp"],
+            params["nside"],
+            map_struct,
+            params["outputDir"],
+        )
     else:
         catalog_struct = None
 

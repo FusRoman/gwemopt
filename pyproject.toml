@@ -51,6 +51,7 @@ dependencies = [
     'shapely',
     'tables',
     'regions',
+    "pyarrow>=19.0.0",
 ]
 
 dynamic = ["version"]
@@ -69,7 +70,7 @@ test = [
 ]
 
 [project.scripts]
-gwemopt-run = "gwemopt.run:run"
+gwemopt = "gwemopt.run:run"
 
 [tool.setuptools_scm]
 write_to = "gwemopt/_version.py"

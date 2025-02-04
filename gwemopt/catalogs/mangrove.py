@@ -1,8 +1,9 @@
-import subprocess
+import io
 
+import h5py
 import numpy as np
 import pandas as pd
-from astropy.table import Table
+import requests
 
 from gwemopt.catalogs.base_catalog import BaseCatalog
 
@@ -12,16 +13,21 @@ URL = "https://mangrove.lal.in2p3.fr/data/mangrove.hdf5"
 class MangroveCatalog(BaseCatalog):
     name = "mangrove"
 
+    @property
+    def mag_column(self) -> str:
+        return "magb"
+
     def download_catalog(self):
         temp_path = self.get_temp_path()
         print(f"Mangrove catalog not found locally. Downloading to {temp_path}")
-        subprocess.run(
-            f"wget -O {self.get_temp_path()} {URL}",
-            shell=True,
-            check=True,
-        )
-
-        df = Table.read(temp_path).to_pandas()
+        get_mangrove = requests.get(URL, verify=False)
+        if get_mangrove.status_code == 200:
+            mangrove_bytes = io.BytesIO(get_mangrove.content)
+            df = pd.DataFrame(np.array(h5py.File(mangrove_bytes)["__astropy_table__"]))
+        else:
+            raise ConnectionError(
+                f"requests to get mangrove catalog failed with status code = {get_mangrove.status_code}\n content: {get_mangrove.content}"
+            )
 
         key_map = {
             "RA": "ra",

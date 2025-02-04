@@ -1,4 +1,6 @@
 import copy
+from enum import Enum
+from pathlib import Path
 
 import healpy as hp
 import numpy as np
@@ -6,6 +8,7 @@ from astroquery.vizier import Vizier
 from ligo.skymap.bayestar import derasterize
 from scipy.stats import norm
 
+from gwemopt.catalogs.base_catalog import BaseCatalog
 from gwemopt.catalogs.clu import CluCatalog
 from gwemopt.catalogs.glade import GladeCatalog
 from gwemopt.catalogs.mangrove import MangroveCatalog
@@ -16,48 +19,77 @@ from gwemopt.catalogs.twomrs import TwoMRSCatalog
 Vizier.ROW_LIMIT = -1
 
 
-def get_catalog(params, map_struct, export_catalog: bool = True):
+class CatalogName(Enum):
+    TWOMRS = "2MRS"
+    GLADE = "GLADE"
+    CLU = "CLU"
+    MANGROVE = "MANGROVE"
+    NED = "NED"
+    NOCAT = "NOCATALOG"
+
+
+class GalGrade(Enum):
+    S = "S"
+    Sloc = "Sloc"
+    Smass = "Smass"
+
+
+class CatalogOpts:
+
+    def __init__(
+        self, catalog_name: str, galaxy_grade: str, galaxy_limit: int, catalog_dir: Path
+    ) -> None:
+        catalog_name = "TWOMRS" if catalog_name == "2MRS" else catalog_name
+        self.catalog = CatalogName[catalog_name]
+        self.galaxy_grade = GalGrade[galaxy_grade]
+        if self.catalog != CatalogName.MANGROVE and self.galaxy_grade == GalGrade.Smass:
+            raise ValueError(
+                "You are trying to use the stellar mass information (Smass), "
+                "please select the mangrove catalog for such use."
+            )
+        self.galaxy_limit = galaxy_limit
+        self.catalog_dir = catalog_dir
+        self.catalog_dir.mkdir(parents=True, exist_ok=True)
+
+    def catalog_from_str(self) -> BaseCatalog:
+        match self.catalog:
+            case CatalogName.TWOMRS:
+                return TwoMRSCatalog(catalog_dir=self.catalog_dir)
+            case CatalogName.GLADE:
+                return GladeCatalog(catalog_dir=self.catalog_dir)
+            case CatalogName.MANGROVE:
+                return MangroveCatalog(catalog_dir=self.catalog_dir)
+            case CatalogName.NED:
+                return NEDCatalog(catalog_dir=self.catalog_dir)
+            case CatalogName.CLU:
+                return CluCatalog(catalog_dir=self.catalog_dir)
+
+
+def get_catalog(
+    catalog_opts: CatalogOpts,
+    confidence_level: float,
+    powerlaw_dist_exp: float,
+    nside: int,
+    map_struct,
+    output_dir: Path,
+    export_catalog: bool = True,
+):
     """
     Get the catalog of galaxies to be used in the optimization.
     """
-    params["catalogDir"].mkdir(parents=True, exist_ok=True)
 
     """AB Magnitude zero point."""
     MAB0 = -2.5 * np.log10(3631.0e-23)
     pc_cm = 3.08568025e18
     const = 4.0 * np.pi * (10.0 * pc_cm) ** 2.0
 
-    if params["catalog"] == "2MRS":
-        cat = TwoMRSCatalog(catalog_dir=params["catalogDir"])
-        default_mag_column = "magk"
-
-    elif params["catalog"] == "GLADE":
-        cat = GladeCatalog(catalog_dir=params["catalogDir"])
-        default_mag_column = "magk"
-
-    elif params["catalog"] == "CLU":
-        cat = CluCatalog(catalog_dir=params["catalogDir"])
-        default_mag_column = "magb"
-
-    elif params["catalog"] == "mangrove":
-        cat = MangroveCatalog(catalog_dir=params["catalogDir"])
-        default_mag_column = "magb"
-
-    elif params["catalog"] == "NED":
-        cat = NEDCatalog(catalog_dir=params["catalogDir"])
-        default_mag_column = "magk"
-    else:
-        raise KeyError(
-            f"Unknown galaxy catalog: {params['galaxy_catalog']}. "
-            f"Must be one of '2MRS', 'GLADE', 'CLU', 'mangrove', or 'NED'"
-        )
+    cat = catalog_opts.catalog_from_str()
 
     cat_df = cat.get_catalog()
-    mag_column = params.get("catalog_mag_column", default_mag_column)
 
-    if params["catalog"] == "glade":
+    if catalog_opts.catalog == CatalogName.GLADE:
         # Keep only galaxies with finite B mag when using it in the grade
-        if params["galaxy_grade"] == "S":
+        if catalog_opts.galaxy_grade == GalGrade.S:
             mask = np.where(~np.isnan(cat_df["magb"]))[0]
             cat_df = cat_df.iloc[mask]
 
@@ -65,11 +97,11 @@ def get_catalog(params, map_struct, export_catalog: bool = True):
     prob_sorted = np.sort(prob_scaled)[::-1]
     prob_indexes = np.argsort(prob_scaled)[::-1]
     prob_cumsum = np.cumsum(prob_sorted)
-    index = np.argmin(np.abs(prob_cumsum - params["confidence_level"])) + 1
+    index = np.argmin(np.abs(prob_cumsum - confidence_level)) + 1
     prob_scaled[prob_indexes[index:]] = 0.0
 
     ipix = hp.ang2pix(
-        params["nside"],
+        nside,
         np.array(cat_df["ra"]),
         np.array(cat_df["dec"]),
         lonlat=True,
@@ -107,7 +139,7 @@ def get_catalog(params, map_struct, export_catalog: bool = True):
                         map_struct["skymap_raster_schedule"]["DISTSIGMA"][ipix],
                     ).pdf(cat_df["distmpc"])
                 )
-                ** params["powerlaw_dist_exp"]
+                ** powerlaw_dist_exp
                 / map_struct["pixarea"]
             )
 
@@ -128,8 +160,8 @@ def get_catalog(params, map_struct, export_catalog: bool = True):
     Lblist = []
 
     for _, row in cat_df.iterrows():
-        if row[mag_column] is not None:
-            Mb = row[mag_column] - 5 * np.log10((row["distmpc"] * 10**6)) + 5
+        if row[cat.mag_column] is not None:
+            Mb = row[cat.mag_column] - 5 * np.log10((row["distmpc"] * 10**6)) + 5
             Lb = Lsun * 2.512 ** (Msun - Mb)
             Lblist.append(Lb)
         else:
@@ -160,13 +192,11 @@ def get_catalog(params, map_struct, export_catalog: bool = True):
     s_loc[np.isnan(s_loc)] = 0
     Slum[np.isnan(Slum)] = 0
 
-    if params["galaxy_grade"] == "Smass":
-        if params["galaxy_catalog"] != "mangrove":
-            raise ValueError(
-                "You are trying to use the stellar mass information (Smass), "
-                "please select the mangrove catalog for such use."
-            )
-
+    if (
+        catalog_opts.catalog == CatalogName.MANGROVE
+        and catalog_opts.galaxy_grade == GalGrade.Smass
+    ):
+        print("Use of the stellar mass information (Smass) from the MANGROVE catalog")
         # set Smass
         s_mass = cat_df["stellarmass"].to_numpy()
 
@@ -208,22 +238,19 @@ def get_catalog(params, map_struct, export_catalog: bool = True):
 
     s = np.array(s_loc * Slum * sdet)
     prob = np.zeros(map_struct["skymap_raster_schedule"]["PROB"].shape)
-    if params["galaxy_grade"] == "Sloc":
-        for j in range(len(ipix)):
-            prob[ipix[j]] += s_loc[j]
-        grade = s_loc
-    elif params["galaxy_grade"] == "S":
-        for j in range(len(ipix)):
-            prob[ipix[j]] += s[j]
-        grade = s
-    elif params["galaxy_grade"] == "Smass":
-        for j in range(len(ipix)):
-            prob[ipix[j]] += s_mass[j]
-        grade = s_mass
-    else:
-        raise ValueError(
-            "You are trying to use a galaxy grade that is not implemented yet."
-        )
+    match catalog_opts.galaxy_grade:
+        case GalGrade.Sloc:
+            for j in range(len(ipix)):
+                prob[ipix[j]] += s_loc[j]
+            grade = s_loc
+        case GalGrade.S:
+            for j in range(len(ipix)):
+                prob[ipix[j]] += s[j]
+            grade = s
+        case GalGrade.Smass:
+            for j in range(len(ipix)):
+                prob[ipix[j]] += s_mass[j]
+            grade = s_mass
 
     prob[np.isnan(prob)] = 0.0
     prob = prob / np.sum(prob)
@@ -235,24 +262,26 @@ def get_catalog(params, map_struct, export_catalog: bool = True):
     cat_df["grade"] = grade
     cat_df["S"] = s
     cat_df["Sloc"] = s_loc
-    if params["galaxy_grade"] != "Smass":
+    if catalog_opts.galaxy_grade != GalGrade.Smass:
         cat_df["Smass"] = 1.0
+    else:
+        cat_df["Smass"] = s_mass
 
     mask = np.where(~np.isnan(grade))[0]
     cat_df = cat_df.iloc[mask]
 
     cat_df.sort_values(by=["grade"], inplace=True, ascending=False, ignore_index=True)
 
-    if len(cat_df) > params["galaxy_limit"]:
-        print(f'Cutting catalog to top {params["galaxy_limit"]} galaxies...')
-        cat_df = cat_df.iloc[: params["galaxy_limit"]]
+    if len(cat_df) > catalog_opts.galaxy_limit:
+        print(f"Cutting catalog to top {catalog_opts.galaxy_limit} galaxies...")
+        cat_df = cat_df.iloc[: catalog_opts.galaxy_limit]
 
     # now normalize the distributions
     for key in ["S", "Sloc", "Smass"]:
         cat_df[key] = cat_df[key] / np.sum(cat_df[key])
 
     if export_catalog:
-        output_path = params["outputDir"].joinpath(f"catalog_{cat.name}.csv")
+        output_path = output_dir.joinpath(f"catalog_{cat.name}.csv")
         print(f"Saving catalog to {output_path}")
         cat_df.to_csv(output_path)
 
